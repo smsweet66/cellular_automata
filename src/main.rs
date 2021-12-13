@@ -1,22 +1,13 @@
 mod cell_grid;
-mod vertex_array;
-mod vertex_buffer;
-mod vertex_buffer_layout;
-mod index_buffer;
 mod shader;
-mod renderer;
 
-extern crate sdl2;
-use std::time::SystemTime;
-use gl33::GL_COLOR_BUFFER_BIT;
-use gl33::global_loader::{glClear, load_global_gl};
+extern crate glium;
+use glium::*;
 use nalgebra_glm::{Mat4, ortho};
-use sdl2::event::Event;
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::video::DisplayMode;
-use sdl2::VideoSubsystem;
 use crate::cell_grid::CellGrid;
-use crate::shader::Shader;
+use crate::glutin::GlProfile;
+use crate::glutin::window::Fullscreen;
+use crate::shader::gen_shader_program;
 
 fn main()
 {
@@ -24,55 +15,48 @@ fn main()
     let screen_height = 1440;
     let cols = screen_width/5;
     let rows = screen_height/5;
-    let hertz = 120.0;
 
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-    video_subsystem.gl_set_swap_interval(1);
-    let mut window = video_subsystem.window("rust-sdl2 demo", 2560, 1440)
-        .fullscreen_desktop()
-        .opengl()
-        .build()
-        .unwrap();
-
-    let context = window.gl_create_context().unwrap();
-    window.gl_make_current(&context);
-
-    unsafe {
-        load_global_gl(&|ptr| {
-            let c_str = std::ffi::CStr::from_ptr(ptr as *const i8);
-            let r_str = c_str.to_str().unwrap();
-            video_subsystem.gl_get_proc_address(r_str) as _
-        });
-    }
-
-    let mut shader = Shader::new();
-    shader.bind();
+    let event_loop = glutin::event_loop::EventLoop::new();
+    let window = glutin::window::WindowBuilder::new()
+        .with_fullscreen(Option::Some(Fullscreen::Borderless(Option::None)));
+    let context = glutin::ContextBuilder::new()
+        .with_vsync(true)
+        .with_hardware_acceleration(Option::Some(true))
+        .with_gl_profile(GlProfile::Core);
+    let display = Display::new(window, context, &event_loop).unwrap();
+    let shader_program = gen_shader_program(&display);
 
     let proj:Mat4 = ortho(0.0, screen_width as f32, 0.0, screen_height as f32, -1.0, 1.0);
-    shader.set_uniform_mat4(&String::from("u_proj"), &proj);
 
-    let mut grid = CellGrid::new(rows as i32, cols as i32, screen_width as f32, screen_height as f32);
-    unsafe { glClear(GL_COLOR_BUFFER_BIT) };
+    let mut grid = CellGrid::new(&display,rows as i32, cols as i32, screen_width as f32, screen_height as f32);
 
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    'main: loop
+    event_loop.run(move |event, _, control_flow|
     {
-        let start = SystemTime::now();
-        for event in event_pump.poll_iter()
+        match event
         {
-            match event
-            {
-                Event::Quit {..}  => { break 'main },
-                _ => {}
-            }
+            glutin::event::Event::WindowEvent { event, .. } => match event {
+                glutin::event::WindowEvent::CloseRequested => {
+                    *control_flow = glutin::event_loop::ControlFlow::Exit;
+                    return;
+                },
+                _ => return,
+            },
+            glutin::event::Event::NewEvents(cause) => match cause {
+                glutin::event::StartCause::ResumeTimeReached { .. } => (),
+                glutin::event::StartCause::Init => (),
+                _ => return,
+            },
+            _ => return,
         }
 
-        unsafe { glClear(GL_COLOR_BUFFER_BIT) };
-        grid.update_grid();
-        grid.draw_grid(&mut shader);
-        window.gl_swap_window();
+        let next_frame_time = std::time::Instant::now() +
+            std::time::Duration::from_secs_f32(1.0/60.0);
+        *control_flow = glutin::event_loop::ControlFlow::WaitUntil(next_frame_time);
 
-        while start.elapsed().unwrap().as_secs_f64() < 1.0/hertz {}
-    }
+        let mut target = display.draw();
+        target.clear_color(0.0, 0.0, 0.0, 0.0);
+        grid.update_grid();
+        grid.draw_grid(&mut target, &shader_program, &proj);
+        target.finish().unwrap();
+    });
 }
